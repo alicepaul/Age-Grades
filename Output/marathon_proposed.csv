@@ -1,0 +1,3 @@
+"mean_difference","ci_lower","ci_upper","ci_method","n","n_races","bootstrap_draws","statistic","p_value","log_p_value","p_display","test","alternative","Analysis"
+-3.5244185638671,-3.88410918918398,-3.15906661161569,"Whole-race bootstrap of mean, percentile 95%",2419,216,1999,-12.038263689133,2.23612616693542e-33,-75.1805630898183,"<0.001","Clustered Wilcoxon signed rank test using Rosner-Glynn-Lee method","two.sided","Matched winners"
+-0.607875975119043,-1.40702584297229,0.257112115648901,"Whole-race bootstrap of mean, percentile 95%",392329,216,1999,3.12461156729573,0.0017803999114521,-6.33091727055741,"0.00178","Clustered rank-sum test (Datta-Satten)","two.sided","All finishers"
