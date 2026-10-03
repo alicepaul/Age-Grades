@@ -2,9 +2,9 @@
 "Female","5 km","rho","Low",1,1000,339.322177189532,2
 "Female","5 km","rho","Current",50,1000,339.322177189532,7
 "Female","5 km","rho","High",1000,1000,339.322177189532,8
-"Female","5 km","eta","Low",50,0,339.322177189532,6
+"Female","5 km","eta","Low",50,0,339.322177189532,7
 "Female","5 km","eta","Current",50,1000,339.322177189532,7
-"Female","5 km","eta","High",50,1e+06,339.322177189532,9
+"Female","5 km","eta","High",50,1e+06,339.322177189532,6
 "Female","10 km","rho","Low",1,1000,494.171336132383,1
 "Female","10 km","rho","Current",50,1000,494.171336132383,5
 "Female","10 km","rho","High",1000,1000,494.171336132383,6
@@ -13,22 +13,22 @@
 "Female","10 km","eta","High",50,1e+06,494.171336132383,7
 "Female","Half Marathon","rho","Low",1,1000,109.854114198756,1
 "Female","Half Marathon","rho","Current",50,1000,109.854114198756,6
-"Female","Half Marathon","rho","High",1000,1000,109.854114198756,8
-"Female","Half Marathon","eta","Low",50,0,109.854114198756,5
+"Female","Half Marathon","rho","High",1000,1000,109.854114198756,7
+"Female","Half Marathon","eta","Low",50,0,109.854114198756,6
 "Female","Half Marathon","eta","Current",50,1000,109.854114198756,6
-"Female","Half Marathon","eta","High",50,1e+06,109.854114198756,10
+"Female","Half Marathon","eta","High",50,1e+06,109.854114198756,7
 "Female","Marathon","rho","Low",1,1000,494.171336132383,1
 "Female","Marathon","rho","Current",50,1000,494.171336132383,6
 "Female","Marathon","rho","High",1000,1000,494.171336132383,6
 "Female","Marathon","eta","Low",50,0,494.171336132383,5
 "Female","Marathon","eta","Current",50,1000,494.171336132383,6
-"Female","Marathon","eta","High",50,1e+06,494.171336132383,7
+"Female","Marathon","eta","High",50,1e+06,494.171336132383,6
 "Male","5 km","rho","Low",1,1000,159.985871960606,3
 "Male","5 km","rho","Current",50,1000,159.985871960606,5
-"Male","5 km","rho","High",1000,1000,159.985871960606,10
+"Male","5 km","rho","High",1000,1000,159.985871960606,9
 "Male","5 km","eta","Low",50,0,159.985871960606,5
 "Male","5 km","eta","Current",50,1000,159.985871960606,5
-"Male","5 km","eta","High",50,1e+06,159.985871960606,8
+"Male","5 km","eta","High",50,1e+06,159.985871960606,6
 "Male","10 km","rho","Low",1,1000,1048.11313415469,1
 "Male","10 km","rho","Current",50,1000,1048.11313415469,6
 "Male","10 km","rho","High",1000,1000,1048.11313415469,6
@@ -40,7 +40,7 @@
 "Male","Half Marathon","rho","High",1000,1000,159.985871960606,7
 "Male","Half Marathon","eta","Low",50,0,159.985871960606,5
 "Male","Half Marathon","eta","Current",50,1000,159.985871960606,6
-"Male","Half Marathon","eta","High",50,1e+06,159.985871960606,8
+"Male","Half Marathon","eta","High",50,1e+06,159.985871960606,6
 "Male","Marathon","rho","Low",1,1000,6866.488450043,1
 "Male","Marathon","rho","Current",50,1000,6866.488450043,5
 "Male","Marathon","rho","High",1000,1000,6866.488450043,6

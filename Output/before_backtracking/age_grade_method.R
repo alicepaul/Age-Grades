@@ -78,18 +78,16 @@ asymmetric_loss <- function(y, fitted, rho) {
 #' @param spline_spec Required specification from make_spline_spec().
 #'   Reuse the full-domain basis and grid for held-out fits.
 #' @param max_iter Maximum number of update steps; default 100.
-#' @param tol Relative direction and gradient tolerance; default
-#'   1e-8, scaled by 1 + max(abs(beta)) for the Newton direction.
-#'   The relative gradient, allowing for cancellation roundoff,
-#'   must also be below tol.
+#' @param tol Absolute maximum coefficient-change tolerance; default
+#'   1e-8. Stopping also requires both sets of weights to be unchanged
+#'   from their previous iteration values.
 #' @param convex_after Penalize negative second differences only at
 #'   grid centers strictly above this age; default 35.
 #'
 #' @return A list containing sorted observations, coefficients, fitted
-#'   times, settings, final residual weights, final grid
+#'   times, settings, residual weights from the last update, final grid
 #'   second differences, curvature-region indicators, violation counts,
-#'   iteration count, convergence flag, objective and step histories,
-#'   relative gradient, backtrack count, and spline specification.
+#'   iteration count, and the stored spline specification.
 fit_asymmetric_spline <- function(x, y, lambda = 1, rho = 10, 
                                   eta = 100, spline_spec, 
                                   max_iter = 100, tol = 1e-8,
@@ -104,6 +102,7 @@ fit_asymmetric_spline <- function(x, y, lambda = 1, rho = 10,
   # Construct the observation-level basis.
   B <- spline_basis(x, spline_spec)
   p <- ncol(B)
+  D <- diff(diag(p), differences = 2)
   
   # Penalize second differences of adjacent spline coefficients.
   D2_beta <- diff(diag(p), differences = 2)
@@ -124,90 +123,49 @@ fit_asymmetric_spline <- function(x, y, lambda = 1, rho = 10,
     t(B) %*% y
   )
   
-  A <- D2_fit %*% B_grid
-
-  # Evaluate the complete objective and its exact gradient at b.
-  # Return the active weights and a cancellation-aware gradient scale.
-  evaluate <- function(b) {
-    residual <- drop(B %*% b) - y
-    w <- ifelse(residual > 0, rho, 1)
-    curvature <- drop(A %*% b)
-    v <- as.numeric(curvature < 0 & convex_region)
-    smooth <- drop(D2_beta %*% b)
-    g_data <- 2*drop(crossprod(B, w*residual))
-    g_smooth <- 2*lambda*drop(crossprod(D2_beta, smooth))
-    g_curve <- 2*eta*drop(crossprod(A, v*curvature))
-    gradient <- g_data + g_smooth + g_curve
-    scale <- 1 + abs(g_data) + abs(g_smooth) + abs(g_curve)
-    # Bound cancellation error from matrix products at large times.
-    magnitude <- drop(
-      crossprod(abs(B), w*(abs(B) %*% abs(b) + abs(y))) +
-      lambda*crossprod(abs(D2_beta), abs(D2_beta) %*% abs(b)) +
-      eta*crossprod(abs(A), v*(abs(A) %*% abs(b))))
-    roundoff <- 100*.Machine$double.eps*pmax(1, magnitude)
-    list(value = sum(w*residual^2) + lambda*sum(smooth^2) +
-           eta*sum(v*curvature^2), gradient = gradient,
-         relative_gradient =
-           max(pmax(abs(gradient) - roundoff, 0)/scale),
-         weights = w, convex_weights = v)
-  }
-
-  state <- evaluate(beta)
-  objective_history <- state$value
-  step_history <- numeric()
-  backtracks <- 0L
-  converged <- FALSE
-
+  weights_old <- rep(1, n)
+  convex_weights_old <- rep(0, n_grid - 2)
+  
   for (iter in seq_len(max_iter)) {
-    lhs <- crossprod(B, state$weights*B) + lambda*Omega +
-      eta*crossprod(A, state$convex_weights*A)
-
-    # Solve for the Newton direction without subtracting large fits.
-    direction <- drop(solve(lhs, -state$gradient/2))
-    if (max(abs(direction)) <= tol*(1 + max(abs(beta))) &&
-        state$relative_gradient <= tol) {
-      converged <- TRUE
+    
+    fitted <- as.vector(B %*% beta)
+    
+    # Weight observations with fitted times above observed times by rho.
+    weights <- ifelse(y < fitted, rho, 1)
+    W <- diag(weights)
+    
+    # Compute second differences of fitted times on the fixed grid.
+    second_diff <- as.vector(D2_fit %*% B_grid %*% beta)
+    
+    # Activate the penalty for negative differences above the threshold.
+    convex_weights <- ifelse(second_diff < 0 & convex_region, 1, 0)
+    C <- diag(convex_weights)
+    
+    # Construct the active, soft curvature penalty matrix.
+    ConvexPenalty <- t(B_grid) %*% t(D2_fit) %*%
+      C %*% D2_fit %*% B_grid
+    
+    lhs <- t(B) %*% W %*% B +
+      lambda * Omega +
+      eta * ConvexPenalty
+    
+    rhs <- t(B) %*% W %*% y
+    
+    beta_new <- solve(lhs, rhs)
+    
+    # Require a small absolute change and stable weight patterns.
+    if (max(abs(beta_new - beta)) < tol &&
+        all(weights == weights_old) &&
+        all(convex_weights == convex_weights_old)) {
+      beta <- beta_new
       break
     }
-    slope <- sum(state$gradient*direction)
-    if (!is.finite(slope) || slope >= 0) {
-      stop("Spline update is not a finite descent direction")
-    }
-
-    # Armijo backtracking: halve a full step until sufficient decrease.
-    # The allowance covers roundoff when objective changes are tiny.
-    step <- 1
-    allowance <- 10*.Machine$double.eps*max(1, abs(state$value))
-    accepted <- FALSE
-    for (halving in 0:50) {
-      candidate <- beta + step*direction
-      trial <- evaluate(candidate)
-      if (is.finite(trial$value) && trial$value <=
-          state$value + 1e-4*step*slope + allowance) {
-        accepted <- TRUE
-        break
-      }
-      step <- step/2
-    }
-    if (!accepted) stop("Spline backtracking failed")
-    beta <- candidate
-    state <- trial
-    backtracks <- backtracks + halving
-    step_history <- c(step_history, step)
-    objective_history <- c(objective_history, state$value)
+    
+    beta <- beta_new
+    weights_old <- weights
+    convex_weights_old <- convex_weights
   }
-
-  # Check the final accepted iterate even at the iteration limit.
-  lhs <- crossprod(B, state$weights*B) + lambda*Omega +
-    eta*crossprod(A, state$convex_weights*A)
-  direction <- drop(solve(lhs, -state$gradient/2))
-  converged <- max(abs(direction)) <= tol*(1 + max(abs(beta))) &&
-    state$relative_gradient <= tol
-  if (!converged) stop(sprintf(
-    "No convergence: lambda=%g, rho=%g, gradient=%g, direction=%g",
-    lambda, rho, state$relative_gradient, max(abs(direction))))
-  weights <- state$weights
-
+  
   # Recompute fitted times and grid differences at the final iterate.
   fitted <- as.vector(B %*% beta)
   second_diff <- as.vector(D2_fit %*% B_grid %*% beta)
@@ -227,12 +185,6 @@ fit_asymmetric_spline <- function(x, y, lambda = 1, rho = 10,
     convex_violations = sum(second_diff < 0 & convex_region),
     convex_violations_all = sum(second_diff < 0),
     iterations = iter,
-    converged = converged,
-    objective = state$value,
-    relative_gradient = state$relative_gradient,
-    backtracks = backtracks,
-    objective_history = objective_history,
-    step_history = step_history,
     spline_spec = spline_spec
   )
 }

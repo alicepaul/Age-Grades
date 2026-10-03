@@ -162,7 +162,7 @@ for (sex in c("Female", "Male")) {
         eta = setting$eta, spline_spec = spline_spec,
         convex_after = convex_after, max_iter = 2000
       )
-      if (sensitivity_fit$iterations >= 2000) {
+      if (!sensitivity_fit$converged) {
         stop("Sensitivity fit reached iteration limit: ",
              sex, " / ", event, " / ", setting$Penalty, " / ",
              setting$Level)
