@@ -1,10 +1,7 @@
 library(tidyverse)
 library(patchwork)
-library(gt)
-library(gtsummary)
-library(ggh4x)
 library(scales)
-library(clusrank)
+library(geepack)
 
 # create directories
 out <- "Output"
@@ -50,10 +47,10 @@ df %>%
 
 # set parameters
 eta <- 1000
-rho <- 30
+rho <- 50
 convex_after <- 35
 lambdas <- 10^seq(-4, 4, length.out = 50)
-knots <- seq(13,80,4)
+knots <- seq(13,80,1)
 
 # store results on influence
 influence <- list()
@@ -328,29 +325,10 @@ ttest_results <- df %>%
       alternative = "two.sided"
     )$p.value,
     .groups = "drop"
-  ) %>%
-  mutate(
-    label = paste0(
-      "Mean diff = ", round(mean_difference, 2),
-      " pp\n95% CI [", round(ci_lower, 2), ", ",
-      round(ci_upper, 2), "]",
-      "\npaired t-test p (two-sided) ",
-      format.pval(p_value, digits = 3, eps = 0.001)
-    )
   )
 
 write.csv(ttest_results, file.path(out, "records_existing.csv"),
           row.names = FALSE)
-
-# annotations
-plot_labels <- df %>%
-  group_by(Event) %>%
-  summarise(
-    x_pos = max(Standard_AG, na.rm = TRUE),
-    y_pos = Inf,
-    .groups = "drop"
-  ) %>%
-  left_join(ttest_results, by = "Event")
 
 # 2x2 histogram grid
 ggplot(df, aes(x = Standard_AG, fill = Sex)) +
@@ -359,19 +337,7 @@ ggplot(df, aes(x = Standard_AG, fill = Sex)) +
     bins = 30,
     position = "identity"
   ) +
-  scale_y_continuous(expand = expansion(mult = c(0, 0.4))) +
-  geom_text(
-    data = plot_labels,
-    aes(
-      x = x_pos,
-      y = y_pos,
-      label = label
-    ),
-    inherit.aes = FALSE,
-    hjust = 1,
-    vjust = 1.2,
-    size = 3
-  ) +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.05))) +
   facet_wrap(~ Event, nrow = 2, ncol = 2, scales = "free_y") +
   labs(
     x = "Age grade (%)",
@@ -438,111 +404,57 @@ p_race + p_age
 ggsave("Images/marathon_participation.png", width = 10, height = 5,
        bg = "white")
 
-# age group winners - signed ranks use Rosner-Glynn-Lee (RGL)
-# all-finisher rank sums use Datta-Satten (DS) to retain 
-# unequal-size races.
-cluster_rank_sum <- function(value, race, sex) {
-  stopifnot(length(value) == length(race), length(value) == length(sex),
-            all(is.finite(value)), !anyNA(race),
-            all(sex %in% c("Female", "Male")))
-  id <- as.integer(factor(race))
-  size <- tabulate(id)
-  n_races <- length(size)
-  stopifnot(n_races >= 2)
-  female <- as.numeric(sex == "Female")
-  proportion <- as.vector(rowsum(female, id))/size
-  stopifnot(any(female == 1), any(female == 0))
-
-  # sum the race-specific midpoint CDFs at each observed value.
-  order_value <- order(value)
-  ties <- rle(value[order_value])$lengths
-  tie_id <- rep(seq_along(ties), ties)
-  mass <- as.vector(rowsum(1/size[id[order_value]], tie_id))
-  total_cdf <- numeric(length(value))
-  total_cdf[order_value] <- rep(cumsum(mass) - mass/2, ties)
-  within_cdf <- ave(value, id, FUN = function(x) {
-    (rank(x, ties.method = "average") - 0.5)/length(x)
-  })
-  other_cdf <- total_cdf - within_cdf
-  pooled_cdf <- (rank(value, ties.method = "average") - 0.5)/
-    length(value)
-
-  # Cluster contributions to the DS statistic and variance estimate.
-  score <- sum(female/size[id]*(1 + other_cdf))/(n_races + 1)
-  expected <- sum(proportion)/2
-  contribution <- as.vector(rowsum(
-    ((n_races - 1)*female -
-       (sum(proportion) - proportion[id]))*pooled_cdf/
-      (size[id]*(n_races + 1)), id
-  ))
-  expected_contribution <- n_races/(2*(n_races + 1))*
-    (proportion - mean(proportion))
-  variance <- sum((contribution - expected_contribution)^2)
-  if (!is.finite(variance) || variance <= 0) {
-    stop("Clustered rank-sum variance is zero or undefined")
-  }
-  z <- (score - expected)/sqrt(variance)
-  structure(list(
-    statistic = c(Z = z), p.value = 2*pnorm(-abs(z)),
-    alternative = "two.sided", nobs = length(value), nclus = n_races,
-    method = "Clustered rank-sum test (Datta-Satten)",
-    data.name = "value by sex, clustered by race"
-  ), class = "htest")
-}
-
-# bootstrap the descriptive mean difference by sampling whole races.
-race_mean_ci <- function(value, race, sex = NULL,
-                         B = 1999, seed = 20261002) {
+# Gaussian identity-link GEE with race-clustered sandwich errors.
+# With sex omitted, value contains paired female-minus-male gaps.
+# Otherwise the Female coefficient compares pooled runner means.
+gee_summary <- function(value, race, sex = NULL) {
   stopifnot(length(value) == length(race), all(is.finite(value)),
-            !anyNA(race))
-  ids <- as.integer(factor(race))
+            !anyNA(race), length(unique(race)) >= 2)
+  dat <- data.frame(value = value, race = race)
   if (is.null(sex)) {
-    totals <- rowsum(cbind(value, rep(0, length(value))), ids)
-    counts <- rowsum(cbind(rep(1, length(value)),
-                          rep(1, length(value))), ids)
+    dat$female <- 0
+    model <- value ~ 1
+    term <- "(Intercept)"
   } else {
     stopifnot(length(sex) == length(value),
-              all(sex %in% c("Female", "Male")))
-    female <- as.numeric(sex == "Female")
-    male <- as.numeric(sex == "Male")
-    totals <- rowsum(cbind(value*female, value*male), ids)
-    counts <- rowsum(cbind(female, male), ids)
+              all(sex %in% c("Female", "Male")),
+              length(unique(sex)) == 2)
+    dat$female <- as.numeric(sex == "Female")
+    model <- value ~ female
+    term <- "female"
   }
-  # Each sampled race contributes all its observations, including repeats.
-  estimate <- function(index) {
-    total <- colSums(totals[index, , drop = FALSE])
-    count <- colSums(counts[index, , drop = FALSE])
-    if (any(count == 0)) return(NA_real_)
-    total[1]/count[1] - total[2]/count[2]
-  }
-  n_races <- nrow(totals)
-  stopifnot(n_races >= 2)
-  set.seed(seed)
-  draws <- replicate(B, estimate(sample.int(n_races, n_races,
-                                            replace = TRUE)))
-  if (any(!is.finite(draws))) {
-    stop("A bootstrap sample lacks one sex; inspect race coverage")
-  }
-  data.frame(
-    mean_difference = estimate(seq_len(n_races)),
-    ci_lower = unname(quantile(draws, 0.025)),
-    ci_upper = unname(quantile(draws, 0.975)),
-    ci_method = "Whole-race bootstrap of mean, percentile 95%",
-    n = length(value), n_races = n_races, bootstrap_draws = B
-  )
-}
 
-# report results
-rank_summary <- function(test, interval) {
-  stopifnot(test$alternative == "two.sided")
-  z <- unname(test$statistic)
-  stopifnot(length(z) == 1, is.finite(z))
-  cbind(interval, data.frame(
-    statistic = z, p_value = test$p.value,
+  # Collapse identical design rows within race to avoid huge matrices.
+  # Count weights preserve the full-data estimating equations and
+  # race-level sandwich scores for this working-independence model.
+  dat <- dat %>%
+    group_by(race, female) %>%
+    summarise(count = n(), value = mean(value), .groups = "drop") %>%
+    arrange(race, female) %>%
+    mutate(id = as.integer(factor(race)))
+  fit <- geeglm(model, data = dat, id = id, weights = count,
+                family = gaussian("identity"),
+                corstr = "independence", scale.fix = TRUE,
+                std.err = "san.se")
+  if (fit$geese$error != 0) stop("GEE failed to converge")
+  estimate <- unname(coef(fit)[term])
+  index <- match(term, names(coef(fit)))
+  se <- sqrt(fit$geese$vbeta[index, index])
+  stopifnot(is.finite(se), se > 0)
+  z <- estimate/se
+  p <- 2*pnorm(-abs(z))
+  data.frame(
+    mean_difference = estimate, std_error = se,
+    ci_lower = estimate - qnorm(0.975)*se,
+    ci_upper = estimate + qnorm(0.975)*se,
+    ci_method = "GEE robust sandwich Wald 95%",
+    n = length(value), n_races = length(unique(race)),
+    statistic = z, p_value = p, p_underflow = (p == 0),
     log_p_value = log(2) + pnorm(-abs(z), log.p = TRUE),
-    p_display = format.pval(test$p.value, digits = 3, eps = 0.001),
-    test = test$method, alternative = "two.sided"
-  ))
+    p_display = format.pval(p, digits = 3, eps = 0.001),
+    test = "Gaussian identity GEE, race-clustered Wald test",
+    alternative = "two.sided", correlation = "independence"
+  )
 }
 
 winners <- df_23 %>%
@@ -567,43 +479,19 @@ paired_dat <- winners %>%
 # retain paired age-group differences and cluster by race.
 paired_dat <- paired_dat %>%
   mutate(Difference = Female - Male)
-winner_test <- clusWilcox.test(
-  paired_dat$Difference, cluster = as.integer(factor(paired_dat$Race)),
-  paired = TRUE, method = "rgl", exact = FALSE,
-  alternative = "two.sided"
-)
-winner_result <- rank_summary(winner_test,
-  race_mean_ci(paired_dat$Difference, paired_dat$Race))
+winner_result <- gee_summary(
+  paired_dat$Difference, paired_dat$Race)
 
-# all finishers are unpaired across sexes: use clustered rank sums.
+# all finishers are unpaired across sexes: use a sex-effect GEE.
 overall_dat <- df_23
-overall_test <- cluster_rank_sum(
-  overall_dat$Standard_AG, overall_dat$Race, overall_dat$Sex
-)
-overall_result <- rank_summary(overall_test,
-  race_mean_ci(overall_dat$Standard_AG, overall_dat$Race,
-               overall_dat$Sex))
+overall_result <- gee_summary(
+  overall_dat$Standard_AG, overall_dat$Race, overall_dat$Sex)
 write.csv(bind_rows(
   mutate(winner_result, Analysis = "Matched winners"),
   mutate(overall_result, Analysis = "All finishers")
 ), file.path(out, "marathon_existing.csv"), row.names = FALSE)
 
-winner_label <- sprintf(
-  paste0("Mean gap = %.2f pp\nBootstrap 95%% CI [%.2f, %.2f]",
-         "\nClustered signed-rank p %s"),
-  winner_result$mean_difference,
-  winner_result$ci_lower, winner_result$ci_upper,
-  winner_result$p_display
-)
-overall_label <- sprintf(
-  paste0("Mean gap = %.2f pp\nBootstrap 95%% CI [%.2f, %.2f]",
-         "\nClustered rank-sum p %s"),
-  overall_result$mean_difference,
-  overall_result$ci_lower, overall_result$ci_upper,
-  overall_result$p_display
-)
-
-# Plot the same matched winners that enter the paired rank test.
+# Plot the same matched winners that enter the paired GEE analysis.
 winners <- winners %>%
   semi_join(paired_dat, by = c("Race", "AgeGroup"))
 
@@ -615,19 +503,9 @@ p1 <- ggplot(winners,
     alpha = 0.6,
     bins = 30
   ) +
-  scale_y_continuous(expand = expansion(mult = c(0, 0.3))) +
-  annotate(
-    "text",
-    x = Inf,
-    y = Inf,
-    label = winner_label,
-    hjust = 1.05,
-    vjust = 1.2,
-    size = 3.5
-  ) +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.05))) +
   labs(
     title = "Matched age-group winners",
-    subtitle = "Two-sided rank test; CI describes the mean gap",
     x = "Age grade (%)",
     y = "Density within sex"
   ) +
@@ -645,19 +523,9 @@ p2 <- ggplot(df_23,
     alpha = 0.6,
     bins = 40
   ) +
-  scale_y_continuous(expand = expansion(mult = c(0, 0.3))) +
-  annotate(
-    "text",
-    x = Inf,
-    y = Inf,
-    label = overall_label,
-    hjust = 1.05,
-    vjust = 1.2,
-    size = 3.5
-  ) +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.05))) +
   labs(
     title = "All finishers",
-    subtitle = "Two-sided rank test; CI describes the mean gap",
     x = "Age grade (%)",
     y = "Density within sex"
   ) +
@@ -694,29 +562,10 @@ ttest_results <- df %>%
       alternative = "two.sided"
     )$p.value,
     .groups = "drop"
-  ) %>%
-  mutate(
-    label = paste0(
-      "Mean diff = ", round(mean_difference, 2),
-      " pp\n95% CI [", round(ci_lower, 2), ", ",
-      round(ci_upper, 2), "]",
-      "\npaired t-test p (two-sided) ",
-      format.pval(p_value, digits = 3, eps = 0.001)
-    )
   )
 
 write.csv(ttest_results, file.path(out, "records_proposed.csv"),
           row.names = FALSE)
-
-# Annotation locations
-plot_labels <- df %>%
-  group_by(Event) %>%
-  summarise(
-    x_pos = max(New_AG, na.rm = TRUE),
-    y_pos = Inf,
-    .groups = "drop"
-  ) %>%
-  left_join(ttest_results, by = "Event")
 
 # 2x2 histogram grid
 ggplot(df, aes(x = New_AG, fill = Sex)) +
@@ -725,19 +574,7 @@ ggplot(df, aes(x = New_AG, fill = Sex)) +
     bins = 30,
     position = "identity"
   ) +
-  scale_y_continuous(expand = expansion(mult = c(0, 0.4))) +
-  geom_text(
-    data = plot_labels,
-    aes(
-      x = x_pos,
-      y = y_pos,
-      label = label
-    ),
-    inherit.aes = FALSE,
-    hjust = 1,
-    vjust = 1.2,
-    size = 3
-  ) +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.05))) +
   facet_wrap(~ Event, nrow = 2, ncol = 2, scales = "free_y") +
   labs(
     x = "Proposed age grade (%)",
@@ -777,43 +614,19 @@ paired_dat <- winners %>%
 # Retain paired age-group differences and cluster by race.
 paired_dat <- paired_dat %>%
   mutate(Difference = Female - Male)
-winner_test <- clusWilcox.test(
-  paired_dat$Difference, cluster = as.integer(factor(paired_dat$Race)),
-  paired = TRUE, method = "rgl", exact = FALSE,
-  alternative = "two.sided"
-)
-winner_result <- rank_summary(winner_test,
-  race_mean_ci(paired_dat$Difference, paired_dat$Race))
+winner_result <- gee_summary(
+  paired_dat$Difference, paired_dat$Race)
 
-# All finishers are unpaired across sexes: use clustered rank sums.
+# All finishers are unpaired across sexes: use a sex-effect GEE.
 overall_dat <- df_23
-overall_test <- cluster_rank_sum(
-  overall_dat$New_AG, overall_dat$Race, overall_dat$Sex
-)
-overall_result <- rank_summary(overall_test,
-  race_mean_ci(overall_dat$New_AG, overall_dat$Race,
-               overall_dat$Sex))
+overall_result <- gee_summary(
+  overall_dat$New_AG, overall_dat$Race, overall_dat$Sex)
 write.csv(bind_rows(
   mutate(winner_result, Analysis = "Matched winners"),
   mutate(overall_result, Analysis = "All finishers")
 ), file.path(out, "marathon_proposed.csv"), row.names = FALSE)
 
-winner_label <- sprintf(
-  paste0("Mean gap = %.2f pp\nBootstrap 95%% CI [%.2f, %.2f]",
-         "\nClustered signed-rank p %s"),
-  winner_result$mean_difference,
-  winner_result$ci_lower, winner_result$ci_upper,
-  winner_result$p_display
-)
-overall_label <- sprintf(
-  paste0("Mean gap = %.2f pp\nBootstrap 95%% CI [%.2f, %.2f]",
-         "\nClustered rank-sum p %s"),
-  overall_result$mean_difference,
-  overall_result$ci_lower, overall_result$ci_upper,
-  overall_result$p_display
-)
-
-# Plot the same matched winners that enter the paired rank test.
+# Plot the same matched winners that enter the paired GEE analysis.
 winners <- winners %>%
   semi_join(paired_dat, by = c("Race", "AgeGroup"))
 
@@ -825,19 +638,9 @@ p1 <- ggplot(winners,
     alpha = 0.6,
     bins = 30
   ) +
-  scale_y_continuous(expand = expansion(mult = c(0, 0.3))) +
-  annotate(
-    "text",
-    x = Inf,
-    y = Inf,
-    label = winner_label,
-    hjust = 1.05,
-    vjust = 1.2,
-    size = 3.5
-  ) +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.05))) +
   labs(
     title = "Matched age-group winners",
-    subtitle = "Two-sided rank test; CI describes the mean gap",
     x = "Age grade (%)",
     y = "Density within sex"
   ) +
@@ -855,19 +658,9 @@ p2 <- ggplot(df_23,
     alpha = 0.6,
     bins = 40
   ) +
-  scale_y_continuous(expand = expansion(mult = c(0, 0.3))) +
-  annotate(
-    "text",
-    x = Inf,
-    y = Inf,
-    label = overall_label,
-    hjust = 1.05,
-    vjust = 1.2,
-    size = 3.5
-  ) +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.05))) +
   labs(
     title = "All finishers",
-    subtitle = "Two-sided rank test; CI describes the mean gap",
     x = "Age grade (%)",
     y = "Density within sex"
   ) +
@@ -895,20 +688,10 @@ paired_change <- winners %>%
   drop_na(Female, Male) %>%
   mutate(Difference = Female - Male)
 
-change_winner_test <- clusWilcox.test(
-  paired_change$Difference,
-  cluster = as.integer(factor(paired_change$Race)),
-  paired = TRUE, method = "rgl", exact = FALSE,
-  alternative = "two.sided"
-)
-change_winner_result <- rank_summary(change_winner_test,
-  race_mean_ci(paired_change$Difference, paired_change$Race))
-
-change_overall_test <- cluster_rank_sum(
-  df_23$Grade_Change, df_23$Race, df_23$Sex
-)
-change_overall_result <- rank_summary(change_overall_test,
-  race_mean_ci(df_23$Grade_Change, df_23$Race, df_23$Sex))
+change_winner_result <- gee_summary(
+  paired_change$Difference, paired_change$Race)
+change_overall_result <- gee_summary(
+  df_23$Grade_Change, df_23$Race, df_23$Sex)
 method_comparison <- bind_rows(
   mutate(change_winner_result, Analysis = "Matched winners"),
   mutate(change_overall_result, Analysis = "All finishers")
@@ -927,4 +710,26 @@ stopifnot(all(abs(method_comparison$change_in_mean_gap -
   (method_comparison$proposed_gap - method_comparison$existing_gap)) <
   1e-10))
 write.csv(method_comparison, file.path(out, "method_comparison.csv"),
+          row.names = FALSE)
+
+# Export combined tables from this same analysis run.
+record_table <- bind_rows(
+  read.csv(file.path(out, "records_existing.csv")) %>%
+    mutate(Standard = "Existing"),
+  read.csv(file.path(out, "records_proposed.csv")) %>%
+    mutate(Standard = "Proposed")
+) %>%
+  mutate(test = "Paired t-test", alternative = "two.sided",
+         contrast = "Female minus male (percentage points)",
+         ci_method = "Paired t interval, 95%") %>%
+  relocate(Standard, Event)
+write.csv(record_table, file.path(out, "records_test_table.csv"),
+          row.names = FALSE)
+marathon_table <- bind_rows(
+  existing_results %>% mutate(Standard = "Existing"),
+  proposed_results %>% mutate(Standard = "Proposed")
+) %>%
+  mutate(contrast = "Female minus male (percentage points)") %>%
+  relocate(Standard, Analysis)
+write.csv(marathon_table, file.path(out, "marathon_test_table.csv"),
           row.names = FALSE)

@@ -13,7 +13,7 @@ library(splines)
 #'
 #' @return A list containing the internal knots, boundary knots, 
 #' spline degree, and number of basis functions.
-make_spline_spec <- function(x, knots = seq(13, 80, 4), degree = 3,
+make_spline_spec <- function(x, knots = seq(13, 80, 1), degree = 3,
                              boundary = range(x), 
                              grid = seq(boundary[1], boundary[2])) {
   
