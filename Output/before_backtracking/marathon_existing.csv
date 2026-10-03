@@ -1,3 +1,0 @@
-"mean_difference","std_error","ci_lower","ci_upper","ci_method","n","n_races","statistic","p_value","p_underflow","log_p_value","p_display","test","alternative","correlation","Analysis"
--4.8312963965716,0.176311121854221,-5.17685984547973,-4.48573294766348,"GEE robust sandwich Wald 95%",2419,216,-27.4021079655216,2.58840329554924e-165,FALSE,-378.975499146618,"<0.001","Gaussian identity GEE, race-clustered Wald test","two.sided","independence","Matched winners"
--1.69105182353809,0.412633697980122,-2.4997990103867,-0.882304636689473,"GEE robust sandwich Wald 95%",392329,216,-4.09819128155538,4.16391122907974e-05,FALSE,-10.0864706331096,"<0.001","Gaussian identity GEE, race-clustered Wald test","two.sided","independence","All finishers"
